@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# ignore the dataset (150 MB)
+datasets/
+
 # Distribution / packaging
 .Python
 build/
