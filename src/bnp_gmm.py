@@ -1,21 +1,49 @@
 import numpy as np
-from pandas import read_feather
+import pandas as pd
+import pickle
 from dataclasses import dataclass
+from scipy.stats import gamma, beta
+from scipy.special import psi
+from utils import *
 
 @dataclass
-class PriorHyperparameters:
+class NiwPriors:
 
     """
     priors for the Normal Inverse Wishart distribution(data mean, belief of strength in the mean, degrees of freedom
                                                        and the scale matrix)
     """
-
     miu_0: np.ndarray  # data mean
     beta_0: int  # belief of strength in the mean
     niu_0: int  # degrees of freedom
     lambda_0: np.ndarray  # scale matrix
 
-class PosteriorParameters:
+
+@dataclass
+class StickPriors:
+    a_0: int
+    b_0: int
+
+
+class GammaDistribution:
+
+    def __init__(self, a: int=1, b: int=1):
+        self.a = a
+        self.b = b
+        self.p_alpha = 1
+
+    def update_posterior(self, k, variational_a, variational_b):
+
+        new_a = self.a + k - 1
+        new_b = self.b
+
+        for i in range(1, k - 1):
+            new_b -= psi(variational_b[i]) - psi(variational_a[i] + variational_b[i])
+
+        return new_a, new_b
+
+
+class NiwPosteriors:
 
     """
     posteriors for the NIW distribution
@@ -41,21 +69,33 @@ class PosteriorParameters:
         self.p_lambda = lambda_0 + observed_data + uncertainty_coefficient
 
 
-class DirichletProcess:
+class BayesianNonparametricMixture:
 
     """
     approximation of the Dirichlet Process (DP) for GMMs, using a truncated Stick-Breaking prior
     """
 
-    def __init__(self, alpha: float, h: PriorHyperparameters):
+    def __init__(self, alpha: GammaDistribution, h: NiwPriors, truncated_clusters=50):
         """
-        :param alpha: concentration parameter (small alpha -few clusters with larger weights-,
-                                               big alpha -more clusters with smaller weights-)
+        :param alpha: concentration parameter that has a prior, in order to be inferred from data
+                      (small alpha -few clusters with larger weights-, big alpha -more clusters with smaller weights-)
         :param h: the base distribution (the prior for cluster parameters)
         """
-        self.alpha = alpha
-        self.h = h
 
+        if alpha is not None:
+            self.alpha = alpha
+        else:
+            self.alpha = GammaDistribution()
+
+        self.h = h
+        self.k = truncated_clusters
+        self.responsibilities = None
+        self.a_sticks = [object.__new__(StickPriors) for _ in range(self.k)]
+
+    def train(self, num_iterations: int, x_train: pd.DataFrame, y_train=None, posteriors='../models/posteriors.pkl'):
+
+        dim_data = x_train.shape[1]
+        self.responsibilities = np.zeros((k, dim_data))
 
 
 
