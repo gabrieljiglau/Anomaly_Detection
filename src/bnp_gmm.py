@@ -10,13 +10,19 @@ from utils import *
 class PriorHyperparameters:
 
     """
-    priors: data mean, belief of strength in the mean, degrees of freedom and the scale matrix
+    priors: i) for niw data mean, belief of strength in the mean, degrees of freedom and the scale matrix
+            ii) for alpha: a, b
     """
 
     miu_0: np.ndarray  # data mean
     beta_0: int  # belief of strength in the mean
     niu_0: int  # degrees of freedom
     lambda_0: np.ndarray  # scale matrix
+
+    # alpha ~ Gamma(a_q, b_q)
+    # (small alpha -few clusters with larger weights-, big alpha -more clusters with smaller weights-)
+    a: float
+    b: float
 
 
 @dataclass
@@ -26,31 +32,9 @@ class MixingWeight:
     each weight ~ Beta(a_k, b_k)
     """
 
-    a_k: int
-    b_k: int
+    a_k: float
+    b_k: float
     weight: float
-
-
-class VariationalGamma:
-
-    """
-    prior for alpha (the concentration parameter) ~ Gamma(a, b)
-    """
-
-    def __init__(self, a: int=1, b: int=1):
-        self.a = a
-        self.b = b
-        self.value = 1
-
-    def update_posterior(self, k, variational_a, variational_b):
-
-        new_a = self.a + k - 1
-        new_b = self.b
-
-        for i in range(1, k - 1):
-            new_b -= psi(variational_b[i]) - psi(variational_a[i] + variational_b[i])
-
-        return new_a, new_b
 
 
 class NiwPosteriors:
@@ -88,28 +72,22 @@ class BayesianNonparametricMixture:
 
     """
     approximation of the Dirichlet Process (DP) for GMMs, using a truncated Stick-Breaking prior
+    DP ~ G(alpha, h), where -alpha is the concentration parameter;
+                    h - the base distribution (the prior for cluster parameters)
     """
 
-    def __init__(self, alpha: VariationalGamma=None, truncated_clusters=50):
-        """
-        :param alpha: concentration parameter that has a prior, in order to be inferred from data
-                      (small alpha -few clusters with larger weights-, big alpha -more clusters with smaller weights-)
-        """
-
-        if alpha is not None:
-            self.alpha = alpha
-        else:
-            self.alpha = VariationalGamma()
+    def __init__(self, truncated_clusters=50):
 
         self.k = truncated_clusters  # up to k clusters maximum
-        self.responsibilities = None
-        self.priors = object.__new__(PriorHyperparameters) # the base distribution (the prior for cluster parameters)
-        self.posteriors = [object.__new__(NiwPosteriors) for _ in range(self.k)]
+        self.active_clusters = self.k
+        self.priors = object.__new__(PriorHyperparameters)
+        self.niw_posteriors = [object.__new__(NiwPosteriors) for _ in range(self.k)]
         self.sticks = [object.__new__(MixingWeight) for _ in range(self.k)]
+        self.alpha_posteriors = np.ones(2, dtype=int)
+        self.responsibilities = []
 
 
-    def train(self, num_iterations: int, x_train: pd.DataFrame, y_train=None, a_k=1, b_k=1,
-              posteriors='../models/posteriors.pkl'):
+    def train(self, num_iterations: int, x_train: pd.DataFrame, y_train=None, posteriors='../models/posteriors.pkl'):
 
         # the assumption here is that param x_train is cleaned and standardized
 
@@ -117,20 +95,23 @@ class BayesianNonparametricMixture:
         dim_data = x_train.shape[1]
         self.responsibilities = np.zeros((self.k, dim_data))
 
+        a = float(self.alpha_posteriors[0])
+        b = float(self.alpha_posteriors[1])
+
         cluster_means, labels = init_clusters(self.k, x_train)  # cheap KMeans for a decent initialization
-        weights, beta_samples = stick_breaking_prior(a=1, b=1, truncated_clusters=self.k)
+        weights = stick_breaking_prior(a=a, b=b, truncated_clusters=self.k)
 
         h_priors = init_priors(no_clusters=self.k, x_train=x_train, dim_data=dim_data, epsilon=1e-6)
-        self.priors = PriorHyperparameters(h_priors[1], h_priors[2], h_priors[3], h_priors[4])
+        self.priors = PriorHyperparameters(h_priors[1], h_priors[2], h_priors[3], h_priors[4], a, b)
 
         # initializations for prior and posteriors
         for i in range(self.k):
-            self.posteriors[i].miu = cluster_means[i]
-            self.posteriors[i].beta = self.priors.beta_0
-            self.posteriors[i].niu = self.priors.niu_0
-            self.posteriors[i].p_lambda = self.priors.lambda_0
-            self.sticks[i].a_k = a_k
-            self.sticks[i].b_k = b_k
+            self.niw_posteriors[i].miu = cluster_means[i]
+            self.niw_posteriors[i].beta = self.priors.beta_0
+            self.niw_posteriors[i].niu = self.priors.niu_0
+            self.niw_posteriors[i].p_lambda = self.priors.lambda_0
+            self.sticks[i].a_k = a
+            self.sticks[i].b_k = b
             self.sticks[i].weight = weights[i]
 
         for iteration in range(num_iterations):
@@ -138,8 +119,15 @@ class BayesianNonparametricMixture:
             self.variational_e_step(x_train, dim_data)
             self.variational_m_step(x_train, dim_data)
             
-            
-            
+        with open(posteriors, 'wb') as f:
+            pickle.dump({'niw_posteriors': self.niw_posteriors,
+                        'alpha_posteriors': self.alpha_posteriors,
+                        'sticks': self.sticks,
+                        'active_clusters': self.active_clusters}, f)
+
+    def predict(self, x_test, y_test):
+        # de mutat si functia de monitorizare a performantei aici
+        pass
     
     def variational_e_step(self, x_train, dim_data):
         
@@ -161,13 +149,13 @@ class BayesianNonparametricMixture:
             log_pi_expectation = psi(a_k) - psi(a_k + b_k) + expectation_component
             for idx, x_row in enumerate(x_train):
 
-                nominator = (self.posteriors[cluster_idx].beta + 1) * self.posteriors[cluster_idx].p_lambda
-                denominator = self.posteriors[cluster_idx].niu - dim_data + 1
-                denominator *= self.posteriors[cluster_idx].beta
+                nominator = (self.niw_posteriors[cluster_idx].beta + 1) * self.niw_posteriors[cluster_idx].p_lambda
+                denominator = self.niw_posteriors[cluster_idx].niu - dim_data + 1
+                denominator *= self.niw_posteriors[cluster_idx].beta
                 scale_matrix = nominator / denominator
 
-                log_pdf = student_t_pdf(np.array(x_row[1:]), self.posteriors[cluster_idx].niu, dim_data,
-                                        self.posteriors[cluster_idx].miu, scale_matrix)
+                log_pdf = student_t_pdf(np.array(x_row[1:]), self.niw_posteriors[cluster_idx].niu, dim_data,
+                                        self.niw_posteriors[cluster_idx].miu, scale_matrix)
                 log_responsibilities[cluster_idx, idx] = log_pi_expectation + np.log(log_pdf)
 
         log_responsibilities -= logsumexp(log_responsibilities, axis=0, keepdims=True)
@@ -183,26 +171,37 @@ class BayesianNonparametricMixture:
         for k in range(self.k):
             soft_counts[k] = np.sum(self.responsibilities[k, :])
 
-        # stick breaking weights update
-        for k in range(self.k):
-            self.alpha.a = 1 + soft_counts[k]
-            self.alpha.b = E[q(alpha)] + sum(i) sum(j > k) resp(i, j)
+        # stick breaking parameters update
+        alpha_expectation = self.alpha_posteriors[0] / self.alpha_posteriors[1]
+        for cluster in range(self.k):
+            self.sticks[cluster].a_k = 1 + soft_counts[cluster]
+            self.sticks[cluster].b_k = alpha_expectation + responsibilities_sum(self.responsibilities, cluster)
+
+        # alpha parameters update
+        self.active_clusters = count_clusters(self.sticks, self.k)
+        self.alpha_posteriors[0] = self.priors.a + self.active_clusters
+        self.alpha_posteriors[1] = self.priors.b - beta_expectations(self.sticks, self.k)
 
         # new weighted mean
         weighted_means = np.zeros((self.k, x_train.shape[1]))
-        for k in range(self.k):
+        for cluster in range(self.k):
             for idx, row in enumerate(x_train):
-                weighted_means[k, :] += self.responsibilities[k, idx] * np.array(row[1:])
-            weighted_means[k, :] /= soft_counts[k]
+                weighted_means[cluster, :] += self.responsibilities[cluster, idx] * np.array(row[1:])
+            weighted_means[cluster, :] /= soft_counts[cluster]
+
+        # new weights for the sticks
+        new_weights = stick_breaking_prior(float(self.alpha_posteriors[0]), float(self.alpha_posteriors[1]), self.k)
+        for cluster in range (self.k):
+            self.sticks[cluster].weight = new_weights[cluster]
 
         # NIW posterior parameter updates
-        for k in range(self.k):
+        for cluster in range(self.k):
 
-            self.posteriors[k].update_beta(self.priors.beta_0, k, soft_counts)
-            self.posteriors[k].update_niu(self.priors.niu_0, k, soft_counts)
-            self.posteriors[k].update_miu(self.priors.beta_0, self.priors.miu_0, k, soft_counts, weighted_means)
-            self.posteriors[k].update_lambda(self.priors.beta_0, self.priors.miu_0, self.priors.lambda_0,
-                                             k, x_train, soft_counts, weighted_means, self.responsibilities)
+            self.niw_posteriors[cluster].update_beta(self.priors.beta_0, cluster, soft_counts)
+            self.niw_posteriors[cluster].update_niu(self.priors.niu_0, cluster, soft_counts)
+            self.niw_posteriors[cluster].update_miu(self.priors.beta_0, self.priors.miu_0, cluster, soft_counts, weighted_means)
+            self.niw_posteriors[cluster].update_lambda(self.priors.beta_0, self.priors.miu_0, self.priors.lambda_0,
+                                                 cluster, x_train, soft_counts, weighted_means, self.responsibilities)
 
 
 

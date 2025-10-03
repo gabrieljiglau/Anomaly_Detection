@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.special import gammaln
+from scipy.special import gammaln, psi
 from scipy.stats import beta
 from sklearn.cluster import KMeans
 
@@ -16,7 +16,52 @@ def stick_breaking_prior(a: float, b: float, truncated_clusters: int):
         remaining_stick *= (1 - sample)  # remove a quantity proportional to the drawn sample
 
     weights[-1] += remaining_stick  # add what's left to the last cluster
-    return weights, beta_samples
+    return weights
+
+
+def count_clusters(sticks, truncated_clusters):
+
+    """
+    :param sticks: the weight for each cluster
+    :param truncated_clusters: maximum clusters allowed
+    :return: the total clusters which have the expectation(weight) > threshold (e.g. 1e-3)
+    """
+
+    expectations = np.zeros(truncated_clusters, dtype=float)
+    for cluster in range(truncated_clusters):
+        a_k = sticks[cluster].a_k
+        b_k = sticks[cluster].b_k
+        current_exp = a_k / (a_k + b_k)
+
+        for j in range(cluster):
+            a_j = sticks[cluster].a_k
+            b_j = sticks[cluster].b_k
+            current_exp *= b_j / (a_j + b_j)
+
+        expectations[cluster] = current_exp
+
+    return sum(expectation > 1e-3 for expectation in expectations)
+
+
+def beta_expectations(sticks, truncated_clusters):
+
+    total_exp = 0
+    for cluster in range(truncated_clusters):
+        a_k = sticks[cluster].a_k
+        b_k = sticks[cluster].b_k
+        total_exp += psi(b_k) - psi(a_k + b_k)
+
+    return total_exp
+
+
+def responsibilities_sum(current_k, responsibilities):
+
+    resp_sum = 0
+    for k in range(current_k):
+        for j in range(k):
+           resp_sum += responsibilities[k, j]
+
+    return resp_sum
 
 
 def _data_mean(x_train):
@@ -90,6 +135,19 @@ def build_coefficient(beta_0, miu_0, soft_count, weighted_mean):
     diff = (weighted_mean - miu_0).reshape(-1, 1)
 
     return first_term * (diff @ diff.transpose())
+
+
+"""
+    def update_posterior(self, k, variational_a, variational_b):
+
+        new_a = self.a + k - 1
+        new_b = self.b
+
+        for i in range(1, k - 1):
+            new_b -= psi(variational_b[i]) - psi(variational_a[i] + variational_b[i])
+
+        return new_a, new_b
+"""
 
 
 if __name__ == '__main__':
