@@ -1,7 +1,9 @@
 import numpy as np
-from scipy.special import gammaln, psi
-from scipy.stats import beta
 from sklearn.cluster import KMeans
+from sklearn.metrics import confusion_matrix
+from scipy.optimize import linear_sum_assignment
+from scipy.special import gammaln, psi
+from scipy.stats import beta, invwishart, multivariate_normal
 
 
 def stick_breaking_prior(a: float, b: float, truncated_clusters: int):
@@ -31,16 +33,16 @@ def count_clusters(sticks, truncated_clusters):
     for cluster in range(truncated_clusters):
         a_k = sticks[cluster].a_k
         b_k = sticks[cluster].b_k
-        current_exp = a_k / (a_k + b_k)
+        current_exp = (a_k / (a_k + b_k))  # aici cica ar trebui np.log ??
 
         for j in range(cluster):
-            a_j = sticks[cluster].a_k
-            b_j = sticks[cluster].b_k
+            a_j = sticks[j].a_k
+            b_j = sticks[j].b_k
             current_exp *= b_j / (a_j + b_j)
 
         expectations[cluster] = current_exp
 
-    return sum(expectation > 1e-3 for expectation in expectations)
+    return expectations, np.sum(expectations > 1e-3)
 
 
 def beta_expectations(sticks, truncated_clusters):
@@ -68,7 +70,7 @@ def _data_mean(x_train):
 
     data_mean = np.zeros(x_train.shape[1])
     for i in range(x_train.shape[1]):
-        dimension_mean = x_train.iloc[:, i].mean()
+        dimension_mean = x_train.iloc[:, i].mean()  ## acum x_train e numpy array; altfel are loc accesasrea datelor
         data_mean[i] = dimension_mean
     return data_mean
 
@@ -137,20 +139,23 @@ def build_coefficient(beta_0, miu_0, soft_count, weighted_mean):
     return first_term * (diff @ diff.transpose())
 
 
-"""
-    def update_posterior(self, k, variational_a, variational_b):
+def map_clusters(true_labels, cluster_assignments, no_clusters):
 
-        new_a = self.a + k - 1
-        new_b = self.b
+    cm = confusion_matrix(true_labels, cluster_assignments, labels=range(no_clusters))
+    # print(f"confusion_matrix = {cm}")
+    rows, cols = linear_sum_assignment(-cm)
 
-        for i in range(1, k - 1):
-            new_b -= psi(variational_b[i]) - psi(variational_a[i] + variational_b[i])
+    mapping = {col: row for row, col in zip(rows, cols)}
+    new_assignments = np.array([mapping[cluster] for cluster in cluster_assignments])
 
-        return new_a, new_b
-"""
+    return new_assignments, mapping
 
 
-if __name__ == '__main__':
+def sample_covariance(degrees_of_freedom, scale_matrix):
+    return invwishart.rvs(df=degrees_of_freedom, scale=np.linalg.inv(scale_matrix))
 
-    weights, _ = stick_breaking_prior(1, 1, 50)
-    print(f"weights = {weights}, sum(weights) = {sum(weights)}")
+
+def sample_mean(miu_point_estimate, covariance_matrix, strength_mean):
+    covariance_matrix = np.array(covariance_matrix)
+    covariance_matrix /= strength_mean
+    return multivariate_normal(mean=miu_point_estimate, cov=covariance_matrix).rvs()

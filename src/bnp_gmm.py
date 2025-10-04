@@ -1,9 +1,11 @@
-import numpy as np
-import pandas as pd
 import pickle
-from dataclasses import dataclass
-from scipy.stats import gamma, beta
+import os.path
+import pandas as pd
+from sklearn.exceptions import NotFittedError
+from sklearn.metrics import accuracy_score
 from scipy.special import psi, logsumexp
+from scipy.stats import gamma, beta
+from dataclasses import dataclass
 from utils import *
 
 @dataclass
@@ -71,9 +73,9 @@ class NiwPosteriors:
 class BayesianNonparametricMixture:
 
     """
-    approximation of the Dirichlet Process (DP) for GMMs, using a truncated Stick-Breaking prior
+    Hierarchical Dirichlet Process (DP) for GMMs, using a truncated Stick-Breaking prior
     DP ~ G(alpha, h), where -alpha is the concentration parameter;
-                    h - the base distribution (the prior for cluster parameters)
+                    h -the base distribution (the prior for cluster parameters)
     """
 
     def __init__(self, truncated_clusters=50):
@@ -81,7 +83,7 @@ class BayesianNonparametricMixture:
         self.k = truncated_clusters  # up to k clusters maximum
         self.active_clusters = self.k
         self.priors = object.__new__(PriorHyperparameters)
-        self.niw_posteriors = [object.__new__(NiwPosteriors) for _ in range(self.k)]
+        self.niw_posteriors = []
         self.sticks = [object.__new__(MixingWeight) for _ in range(self.k)]
         self.alpha_posteriors = np.ones(2, dtype=int)
         self.responsibilities = []
@@ -89,9 +91,8 @@ class BayesianNonparametricMixture:
 
     def train(self, num_iterations: int, x_train: pd.DataFrame, y_train=None, posteriors='../models/posteriors.pkl'):
 
-        # the assumption here is that param x_train is cleaned and standardized
+        # the assumption here is that param x_train is cleaned and standardized, and are stored as numpy arrays
 
-        x_train = x_train.to_numpy()
         dim_data = x_train.shape[1]
         self.responsibilities = np.zeros((self.k, dim_data))
 
@@ -106,18 +107,19 @@ class BayesianNonparametricMixture:
 
         # initializations for prior and posteriors
         for i in range(self.k):
-            self.niw_posteriors[i].miu = cluster_means[i]
-            self.niw_posteriors[i].beta = self.priors.beta_0
-            self.niw_posteriors[i].niu = self.priors.niu_0
-            self.niw_posteriors[i].p_lambda = self.priors.lambda_0
+            self.niw_posteriors.append(NiwPosteriors(cluster_means[i], self.priors.beta_0, self.priors.niu_0, self.priors.lambda_0))
             self.sticks[i].a_k = a
             self.sticks[i].b_k = b
             self.sticks[i].weight = weights[i]
 
         for iteration in range(num_iterations):
+            print(f"Now at iteration {iteration}")
 
             self.variational_e_step(x_train, dim_data)
             self.variational_m_step(x_train, dim_data)
+
+            acc = self.evaluate_performance(x_train, y_train, self.niw_posteriors, self.sticks)
+            print(f"Accuracy score = {acc}")
             
         with open(posteriors, 'wb') as f:
             pickle.dump({'niw_posteriors': self.niw_posteriors,
@@ -125,10 +127,75 @@ class BayesianNonparametricMixture:
                         'sticks': self.sticks,
                         'active_clusters': self.active_clusters}, f)
 
-    def predict(self, x_test, y_test):
-        # de mutat si functia de monitorizare a performantei aici
-        pass
-    
+    def predict(self, x_test, y_test, num_samples=30, posteriors='../models/posteriors.pkl'):
+
+        """
+        :return: the sampled parameters from each gaussian(mean, cov_matrix), as long as the number of samples drawn
+        """
+
+        if os.path.exists(posteriors):
+            with open(posteriors, 'rb') as f:
+                saved_posteriors = pickle.load(f)
+                self.niw_posteriors = saved_posteriors['niw_posteriors']
+                self.alpha_posteriors = saved_posteriors['alpha_posteriors']
+                self.sticks = saved_posteriors['sticks']
+                self.active_clusters = saved_posteriors['active_clusters']
+
+                sigma_samples = []
+                mu_samples = []
+                for k in range (self.active_clusters):
+
+                    sigma_sample = []
+                    mu_sample = []
+                    for sample in range(num_samples):
+                        cov_matrix = sample_covariance(self.niw_posteriors[k].beta,
+                                                       np.linalg.inv(self.niw_posteriors[k].p_lambda))
+                        mu = sample_mean(self.niw_posteriors[k].miu, cov_matrix, self.niw_posteriors[k].niu)
+
+                        sigma_sample.append(cov_matrix)
+                        mu_sample.append(mu)
+
+                    sigma_samples.append(sigma_sample)
+                    mu_samples.append(mu_sample)
+
+                sigma_samples = np.array(sigma_samples)
+                mu_samples = np.array(mu_samples)
+
+                acc = self.evaluate_performance(x_test, y_test, self.niw_posteriors, self.sticks)
+                print(f"Accuracy on test data = {acc}")
+                return mu_samples, sigma_samples, num_samples
+        else:
+            raise NotFittedError('The Bayesian Nonparametric GMM needs to be trained first !')
+
+    def evaluate_performance(self, x_np, y_np, niw_posteriors,sticks):
+
+        y_np = y_np.flatten()
+        cluster_assignments = []
+
+        for idx, (x_in, y_true) in enumerate(zip(x_np, y_np)):
+            result_probs = []
+            result_instance = []
+            for k in range(self.active_clusters):
+                nominator = (niw_posteriors[k].beta + 1) * niw_posteriors[k].p_lambda
+                denominator = niw_posteriors[k].niu - len(x_in) + 1
+                denominator *= niw_posteriors[k].beta
+                scale_matrix = nominator / denominator
+
+                result_instance.append(student_t_pdf(x_in, niw_posteriors[k].niu, len(x_in), niw_posteriors[k].miu,
+                                                     scale_matrix) * sticks[k].weight)
+            result_probs.append(result_instance)
+            # print(f"result_probs = {result_probs}")
+            result_probs /= np.sum(result_probs)
+            cluster_idx = np.argmax(result_probs)
+            cluster_assignments.append(cluster_idx)
+
+        # assigning the true labels to each gaussian component
+        # posibil aici ca ultimul parametru sa trebuiasca dat in functie
+        cluster_labels, mapping = map_clusters(y_np, cluster_assignments, self.active_clusters)
+        acc = accuracy_score(y_np, cluster_labels)
+
+        return acc
+
     def variational_e_step(self, x_train, dim_data):
         
         """
@@ -178,9 +245,11 @@ class BayesianNonparametricMixture:
             self.sticks[cluster].b_k = alpha_expectation + responsibilities_sum(self.responsibilities, cluster)
 
         # alpha parameters update
-        self.active_clusters = count_clusters(self.sticks, self.k)
+        weights_expectation, self.active_clusters = count_clusters(self.sticks, self.k)
         self.alpha_posteriors[0] = self.priors.a + self.active_clusters
         self.alpha_posteriors[1] = self.priors.b - beta_expectations(self.sticks, self.k)
+        for cluster in range (self.k):
+            self.sticks[cluster].weight = weights_expectation[cluster]  ## maybe normalize them here ?
 
         # new weighted mean
         weighted_means = np.zeros((self.k, x_train.shape[1]))
@@ -188,11 +257,6 @@ class BayesianNonparametricMixture:
             for idx, row in enumerate(x_train):
                 weighted_means[cluster, :] += self.responsibilities[cluster, idx] * np.array(row[1:])
             weighted_means[cluster, :] /= soft_counts[cluster]
-
-        # new weights for the sticks
-        new_weights = stick_breaking_prior(float(self.alpha_posteriors[0]), float(self.alpha_posteriors[1]), self.k)
-        for cluster in range (self.k):
-            self.sticks[cluster].weight = new_weights[cluster]
 
         # NIW posterior parameter updates
         for cluster in range(self.k):
@@ -202,18 +266,3 @@ class BayesianNonparametricMixture:
             self.niw_posteriors[cluster].update_miu(self.priors.beta_0, self.priors.miu_0, cluster, soft_counts, weighted_means)
             self.niw_posteriors[cluster].update_lambda(self.priors.beta_0, self.priors.miu_0, self.priors.lambda_0,
                                                  cluster, x_train, soft_counts, weighted_means, self.responsibilities)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
