@@ -4,6 +4,7 @@ from sklearn.metrics import confusion_matrix
 from scipy.optimize import linear_sum_assignment
 from scipy.special import gammaln, psi
 from scipy.stats import beta, invwishart, multivariate_normal
+from scipy.linalg import fractional_matrix_power
 
 
 def stick_breaking_prior(a: float, b: float, truncated_clusters: int):
@@ -21,7 +22,7 @@ def stick_breaking_prior(a: float, b: float, truncated_clusters: int):
     return weights
 
 
-def count_clusters(sticks, truncated_clusters):
+def weights_expectations(sticks, truncated_clusters):
 
     """
     :param sticks: the weight for each cluster
@@ -33,7 +34,7 @@ def count_clusters(sticks, truncated_clusters):
     for cluster in range(truncated_clusters):
         a_k = sticks[cluster].a_k
         b_k = sticks[cluster].b_k
-        current_exp = (a_k / (a_k + b_k))  # aici cica ar trebui np.log ??
+        current_exp = a_k / (a_k + b_k)  # aici cica ar trebui np.log ??
 
         for j in range(cluster):
             a_j = sticks[j].a_k
@@ -42,35 +43,72 @@ def count_clusters(sticks, truncated_clusters):
 
         expectations[cluster] = current_exp
 
-    return expectations, np.sum(expectations > 1e-3)
+    expectations = np.clip(expectations, 1e-3, None)
+    expectations /= np.sum(expectations)
+    print(f"expectations = {expectations}")
+
+    return expectations
 
 
-def beta_expectations(sticks, truncated_clusters):
+def count_clusters(expectations):
+
+    # cut off when sum of the sorted weights > 0.99
+
+
+def beta_expectations(sticks, truncated_clusters, eps=1e-9):
 
     total_exp = 0
     for cluster in range(truncated_clusters):
-        a_k = sticks[cluster].a_k
-        b_k = sticks[cluster].b_k
-        total_exp += psi(b_k) - psi(a_k + b_k)
+        # a, b are positive parameters
+        a_k = max(sticks[cluster].a_k, eps)
+        b_k = max(sticks[cluster].b_k, eps)
+        total_exp += psi(b_k + eps) - psi(a_k + b_k + eps) # numerical stability
 
+    print(f"total_exp = {total_exp}")
     return total_exp
 
 
 def responsibilities_sum(current_k, responsibilities):
 
-    resp_sum = 0
-    for k in range(current_k):
-        for j in range(k):
-           resp_sum += responsibilities[k, j]
+    """
+    :param current_k: cluster index
+    :param responsibilities: the responsibilities
+    :return: Σ_i (Σ_j>k resp_ij)
+    """
 
-    return resp_sum
+    if current_k >= responsibilities.shape[0] - 1:
+        return 0.0
+
+    return np.sum(responsibilities[current_k + 1: , :])
+
+
+def gaussian_pdf(instance, dim_data, covariance, mean):
+    # instance is a real valued vector
+    denominator =  (2 * np.pi) ** (dim_data / 2) * np.sqrt(np.linalg.det(covariance))
+    diff = instance - mean
+    cov_inverse = fractional_matrix_power(covariance, -1)
+    exp_term = np.exp(-1/2 * (diff.transpose() @ cov_inverse @ diff))
+
+    return exp_term / denominator
+
+
+def compute_log_likelihood(x_train, dim_data, cluster_means, cov_matrices, mixing_weights):
+
+    log_likelihood = 0
+    for row in x_train:
+        prob_sum = 0
+        for i in range(len(cluster_means)):
+            prob_sum += mixing_weights[i] * gaussian_pdf(row, dim_data, cov_matrices[i], cluster_means[i])
+        log_likelihood += np.log(prob_sum + 1e-12)
+
+    return log_likelihood
 
 
 def _data_mean(x_train):
 
     data_mean = np.zeros(x_train.shape[1])
     for i in range(x_train.shape[1]):
-        dimension_mean = x_train.iloc[:, i].mean()  ## acum x_train e numpy array; altfel are loc accesasrea datelor
+        dimension_mean = x_train[:, i].mean()
         data_mean[i] = dimension_mean
     return data_mean
 
@@ -116,19 +154,18 @@ def student_t_pdf(x_in, degrees_of_freedom, dim_data, cluster_mean, scale_matrix
 
 
 def build_sample_covariance(x_train, no_clusters, soft_counts, weighted_means, responsibilities):
-    covariance = []
 
+    covariance = []
     for k in range(no_clusters):
         cov_dim = 0
         for idx, row in enumerate(x_train):
-            diff = np.array(row[1:]) - weighted_means[k]
+            diff = row - weighted_means[k]
             diff = diff.reshape(-1, 1)
             cov_dim += (diff @ diff.transpose()) * responsibilities[k, idx]
 
         # print(f"cov_dim = {cov_dim}")
         # print(f"soft_counts[k] = {soft_counts[k]}")  # should sum up to 1
         covariance.append(cov_dim / soft_counts[k])
-
     return np.array(covariance)
 
 

@@ -61,12 +61,10 @@ class NiwPosteriors:
         self.miu = beta_0 * miu_0 + soft_counts[k] * weighted_means[k, :]
         self.miu /= self.beta
 
-    def update_lambda(self, beta_0, miu_0, lambda_0, k, x_train, soft_counts, weighted_means, responsibilities):
+    def update_lambda(self, beta_0, miu_0, lambda_0, k, soft_counts, weighted_means, cov_matrix):
 
-        covariance_matrix = build_sample_covariance(x_train, k, soft_counts, weighted_means, responsibilities)
-        observed_data = soft_counts[k] * covariance_matrix
+        observed_data = soft_counts[k] * cov_matrix[k]
         uncertainty_coefficient = build_coefficient(beta_0, miu_0, soft_counts[k], weighted_means[k, :])
-
         self.p_lambda = lambda_0 + observed_data + uncertainty_coefficient
 
 
@@ -92,14 +90,15 @@ class BayesianNonparametricMixture:
     def train(self, num_iterations: int, x_train: pd.DataFrame, y_train=None, posteriors='../models/posteriors.pkl'):
 
         # the assumption here is that param x_train is cleaned and standardized, and are stored as numpy arrays
-
         dim_data = x_train.shape[1]
         self.responsibilities = np.zeros((self.k, dim_data))
 
         a = float(self.alpha_posteriors[0])
         b = float(self.alpha_posteriors[1])
 
-        cluster_means, labels = init_clusters(self.k, x_train)  # cheap KMeans for a decent initialization
+        # cluster_means, labels = init_clusters(self.k, x_train)  # cheap KMeans for a decent initialization
+        rng = np.random.default_rng(13)
+        cluster_means = x_train[rng.choice(x_train.shape[0], size=self.k, replace=False)]
         weights = stick_breaking_prior(a=a, b=b, truncated_clusters=self.k)
 
         h_priors = init_priors(no_clusters=self.k, x_train=x_train, dim_data=dim_data, epsilon=1e-6)
@@ -120,6 +119,13 @@ class BayesianNonparametricMixture:
 
             acc = self.evaluate_performance(x_train, y_train, self.niw_posteriors, self.sticks)
             print(f"Accuracy score = {acc}")
+
+            log_likelihood = compute_log_likelihood(x_train, dim_data,
+                                                    [posterior.miu for posterior in self.niw_posteriors],
+                                                    [posterior.p_lambda for posterior in self.niw_posteriors],
+                                                    [stick.weight for stick in self.sticks])
+            print(f"log_likelihood = {log_likelihood}")
+
             
         with open(posteriors, 'wb') as f:
             pickle.dump({'niw_posteriors': self.niw_posteriors,
@@ -221,7 +227,7 @@ class BayesianNonparametricMixture:
                 denominator *= self.niw_posteriors[cluster_idx].beta
                 scale_matrix = nominator / denominator
 
-                log_pdf = student_t_pdf(np.array(x_row[1:]), self.niw_posteriors[cluster_idx].niu, dim_data,
+                log_pdf = student_t_pdf(np.array(x_row), self.niw_posteriors[cluster_idx].niu, dim_data,
                                         self.niw_posteriors[cluster_idx].miu, scale_matrix)
                 log_responsibilities[cluster_idx, idx] = log_pi_expectation + np.log(log_pdf)
 
@@ -237,32 +243,43 @@ class BayesianNonparametricMixture:
         soft_counts = np.zeros(self.k)
         for k in range(self.k):
             soft_counts[k] = np.sum(self.responsibilities[k, :])
+        soft_counts = np.maximum(soft_counts, 1e-8)
 
         # stick breaking parameters update
         alpha_expectation = self.alpha_posteriors[0] / self.alpha_posteriors[1]
         for cluster in range(self.k):
             self.sticks[cluster].a_k = 1 + soft_counts[cluster]
-            self.sticks[cluster].b_k = alpha_expectation + responsibilities_sum(self.responsibilities, cluster)
+            self.sticks[cluster].b_k = alpha_expectation + responsibilities_sum(cluster, self.responsibilities)
 
         # alpha parameters update
-        weights_expectation, self.active_clusters = count_clusters(self.sticks, self.k)
+        pi_expectation = weights_expectations(self.sticks, self.k)
+
+        print(f"active_clusters = {self.active_clusters}")
+
         self.alpha_posteriors[0] = self.priors.a + self.active_clusters
         self.alpha_posteriors[1] = self.priors.b - beta_expectations(self.sticks, self.k)
+
+        print(f"alpha_a = {self.alpha_posteriors[0]}")
+        print(f"alpha_b = {self.alpha_posteriors[1]}")
+
         for cluster in range (self.k):
-            self.sticks[cluster].weight = weights_expectation[cluster]  ## maybe normalize them here ?
+            self.sticks[cluster].weight = pi_expectation[cluster]  ## maybe normalize them here ?
 
         # new weighted mean
         weighted_means = np.zeros((self.k, x_train.shape[1]))
         for cluster in range(self.k):
             for idx, row in enumerate(x_train):
-                weighted_means[cluster, :] += self.responsibilities[cluster, idx] * np.array(row[1:])
-            weighted_means[cluster, :] /= soft_counts[cluster]
+                weighted_means[cluster, :] += self.responsibilities[cluster, idx] * row
+            weighted_means[cluster, :] /= soft_counts[cluster]  ## aici sa imparti doar daca soft_counts > epsilon
+
+        sample_cov = build_sample_covariance(x_train, self.k, soft_counts, weighted_means, self.responsibilities)
 
         # NIW posterior parameter updates
         for cluster in range(self.k):
 
             self.niw_posteriors[cluster].update_beta(self.priors.beta_0, cluster, soft_counts)
             self.niw_posteriors[cluster].update_niu(self.priors.niu_0, cluster, soft_counts)
-            self.niw_posteriors[cluster].update_miu(self.priors.beta_0, self.priors.miu_0, cluster, soft_counts, weighted_means)
+            self.niw_posteriors[cluster].update_miu(self.priors.beta_0, self.priors.miu_0,
+                                                    cluster, soft_counts, weighted_means)
             self.niw_posteriors[cluster].update_lambda(self.priors.beta_0, self.priors.miu_0, self.priors.lambda_0,
-                                                 cluster, x_train, soft_counts, weighted_means, self.responsibilities)
+                                                       cluster, soft_counts, weighted_means, sample_cov)
