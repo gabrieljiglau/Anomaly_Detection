@@ -43,7 +43,6 @@ def weights_expectations(sticks, truncated_clusters):
 
         expectations[cluster] = current_exp
 
-    expectations = np.clip(expectations, 1e-3, None)
     expectations /= np.sum(expectations)
     print(f"expectations = {expectations}")
 
@@ -52,8 +51,15 @@ def weights_expectations(sticks, truncated_clusters):
 
 def count_clusters(expectations):
 
-    # cut off when sum of the sorted weights > 0.99
+    active_clusters = 0
+    current_percentage = 0
+    sorted_expectations = sorted(expectations, reverse=True)
+    for weight in sorted_expectations:
+        if current_percentage < 0.99:
+            active_clusters += 1
+        current_percentage += weight
 
+    return active_clusters
 
 def beta_expectations(sticks, truncated_clusters, eps=1e-9):
 
@@ -99,7 +105,7 @@ def compute_log_likelihood(x_train, dim_data, cluster_means, cov_matrices, mixin
         prob_sum = 0
         for i in range(len(cluster_means)):
             prob_sum += mixing_weights[i] * gaussian_pdf(row, dim_data, cov_matrices[i], cluster_means[i])
-        log_likelihood += np.log(prob_sum + 1e-12)
+        log_likelihood += np.log(prob_sum) + 1e-12
 
     return log_likelihood
 
@@ -155,6 +161,7 @@ def student_t_pdf(x_in, degrees_of_freedom, dim_data, cluster_mean, scale_matrix
 
 def build_sample_covariance(x_train, no_clusters, soft_counts, weighted_means, responsibilities):
 
+
     covariance = []
     for k in range(no_clusters):
         cov_dim = 0
@@ -165,6 +172,7 @@ def build_sample_covariance(x_train, no_clusters, soft_counts, weighted_means, r
 
         # print(f"cov_dim = {cov_dim}")
         # print(f"soft_counts[k] = {soft_counts[k]}")  # should sum up to 1
+        soft_counts[k] = max(soft_counts[k], 1e-12)
         covariance.append(cov_dim / soft_counts[k])
     return np.array(covariance)
 
