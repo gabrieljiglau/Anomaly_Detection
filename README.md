@@ -21,14 +21,14 @@ In theory, such a model could have infinitely many clusters, albeit some of them
 In practice, the number of clusters is approximated using a _truncated_ version (max clusters to consider).
 
 There are different metaphors for the Dirichlet Process, but what was used here, in particular, was the 
-'stick breaking process', where each cluster is given an initial weight from a 'stick' of length 1, based on sampling
-from the Beta distribution, which has realizations inside [0, 1].
+'stick breaking process', where each cluster is given an initial weight from a 'stick' that initially is of 
+length 1, and is shortened based on samplings from a Beta distribution, which has realizations inside [0, 1].
 
 <img src="assets/hierarchical_DP.png" alt="Hierarchical DP flow" width=540/>  
 
 *Hierarchical DP[1]*
 
-More recently, the 'stick breaking prior' DP was used in Variational Encoders, in order to enhance their
+More recently, the 'stick breaking prior' DP was used in Variational Autoencoders, in order to enhance their
 representation capability [2].
 
 
