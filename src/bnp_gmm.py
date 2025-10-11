@@ -99,8 +99,6 @@ class BayesianNonparametricMixture:
         cluster_means, labels = init_clusters(self.k, x_train)  # cheap KMeans for a decent initialization
         weights = stick_breaking_prior(a=1, b=1, truncated_clusters=self.k)
 
-        print(f"weights = {weights}")
-
         h_priors = init_priors(no_clusters=self.k, x_train=x_train, dim_data=dim_data, epsilon=1e-6)
         self.priors = PriorHyperparameters(h_priors[1], h_priors[2], h_priors[3], h_priors[4], a, b)
 
@@ -111,30 +109,13 @@ class BayesianNonparametricMixture:
             self.sticks[i].b_k = b
             self.sticks[i].weight = weights[i]
 
-        niw_posteriors = []
-        sticks_list = []
-        active_clusters = []
-        alpha_posteriors = []
         log_likelihoods = []
-        best_log_likelihood = -np.inf
 
-        stagnation_count = 0
-        index = 0
         for iteration in range(num_iterations):
             print(f"Now at iteration {iteration}")
 
-            if stagnation_count >= 3:
-                print(f"No improvement found after iteration number {iteration + 1}")
-                print(f"Best log_likelihood = {best_log_likelihood}")
-                break
-
             self.variational_e_step(x_train, dim_data)
-            clusters, alpha, sticks, niw_posterior = self.variational_m_step(x_train, dim_data)
-
-            active_clusters.append(clusters)
-            alpha_posteriors.append(alpha)
-            sticks_list.append(sticks)
-            niw_posteriors.append(niw_posterior)
+            self.variational_m_step(x_train, dim_data)
 
             # only for testing with fixed k
             # acc = self._evaluate_performance(x_train, y_train, self.niw_posteriors, self.sticks)
@@ -147,21 +128,14 @@ class BayesianNonparametricMixture:
             print(f"log_likelihood = {log_likelihood}")
             log_likelihoods.append(log_likelihood)
 
-            if log_likelihood > best_log_likelihood:
-                best_log_likelihood = log_likelihood
-                stagnation_count = 0
-                index = iteration
-            else:
-                stagnation_count += 1
 
         # all log_likelihoods, alpha_posteriors, sticks and active clusters, since they will be used for plotting
         with open(posteriors, 'wb') as f:
-            pickle.dump({'niw_posteriors': niw_posteriors[index],
-                        'alpha_posteriors': alpha_posteriors,
-                        'sticks_list': sticks_list,
+            pickle.dump({'niw_posteriors': self.niw_posteriors,
+                        'alpha_posteriors': self.alpha_posteriors,
+                        'sticks_list': self.sticks_list,
                         'active_clusters': self.active_clusters,
-                        'log_likelihoods': log_likelihoods,
-                        'index': index}, f)
+                        'log_likelihoods': log_likelihoods}, f)
 
     def predict(self, x_test, y_test, num_samples=30, posteriors='../models/posteriors.pkl'):
 
@@ -174,8 +148,8 @@ class BayesianNonparametricMixture:
                 saved_posteriors = pickle.load(f)
                 index = saved_posteriors['index']
                 self.niw_posteriors = saved_posteriors['niw_posteriors']
-                self.alpha_posteriors = saved_posteriors['alpha_posteriors'][index]
-                self.sticks = saved_posteriors['sticks_list'][index]
+                self.alpha_posteriors = saved_posteriors['alpha_posteriors']
+                self.sticks = saved_posteriors['sticks_list']
 
                 sigma_samples = []
                 mu_samples = []
@@ -318,4 +292,5 @@ class BayesianNonparametricMixture:
             self.niw_posteriors[cluster].update_lambda(self.priors.beta_0, self.priors.miu_0, self.priors.lambda_0,
                                                        cluster, soft_counts, weighted_means, sample_cov)
 
+        print(f"len(self.sticks) = {len(self.sticks)}")
         return self.active_clusters, self.alpha_posteriors, self.sticks, self.niw_posteriors

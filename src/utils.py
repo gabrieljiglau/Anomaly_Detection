@@ -88,6 +88,22 @@ def responsibilities_sum(current_k, responsibilities):
     return np.sum(responsibilities[current_k + 1: , :])
 
 
+def weight_posterior(current_k, sticks):
+
+    print(f"len(sticks) = {len(sticks)}")
+
+    a_k = sticks[current_k].a_k
+    b_k = sticks[current_k].b_k
+    weight = a_k / (a_k + b_k)
+
+    for j in range(current_k):
+        a_j = sticks[j].a_k
+        b_j = sticks[j].b_k
+        weight *= b_j / (a_j + b_j)
+
+    return weight
+
+
 def gaussian_pdf(instance, dim_data, covariance, mean):
     # instance is a real valued vector
     denominator =  (2 * np.pi) ** (dim_data / 2) * np.sqrt(np.linalg.det(covariance))
