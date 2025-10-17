@@ -8,6 +8,7 @@ __pycache__/
 
 # ignore the dataset (150 MB)
 datasets/
+models/
 
 # Distribution / packaging
 .Python
