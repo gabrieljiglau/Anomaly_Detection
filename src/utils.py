@@ -44,7 +44,7 @@ def weights_expectations(sticks, truncated_clusters):
         expectations[cluster] = current_exp
 
     expectations /= np.sum(expectations)
-    print(f"expectations = {expectations}")
+    # print(f"expectations = {expectations}")
 
     return expectations
 
@@ -90,8 +90,6 @@ def responsibilities_sum(current_k, responsibilities):
 
 def weight_posterior(current_k, sticks):
 
-    print(f"len(sticks) = {len(sticks)}")
-
     a_k = sticks[current_k].a_k
     b_k = sticks[current_k].b_k
     weight = a_k / (a_k + b_k)
@@ -114,7 +112,7 @@ def gaussian_pdf(instance, dim_data, covariance, mean):
     return exp_term / denominator
 
 
-def compute_log_likelihood(x_train, dim_data, cluster_means, cov_matrices, mixing_weights):
+def dataset_log_likelihood(x_train, dim_data, cluster_means, cov_matrices, mixing_weights):
 
     log_likelihood = 0
     for row in x_train:
@@ -124,6 +122,38 @@ def compute_log_likelihood(x_train, dim_data, cluster_means, cov_matrices, mixin
         log_likelihood += np.log(prob_sum) + 1e-12
 
     return log_likelihood
+
+
+def anomaly_statistics(detected_x, true_anomalies, labels):
+
+    detected_anomalies = 0
+    for true_y in true_anomalies:
+        if true_y in detected_x:
+            detected_anomalies += 1
+
+    return detected_anomalies
+
+
+def instance_log_likelihood(X, k_max, niw_posteriors, mixing_weights, toll=1e-300):
+
+    log_responsibilities = np.zeros((k_max, X.shape[0]))
+
+    for k in range(k_max):
+        for index, x_row in enumerate(X):
+
+            if index % 10000 == 0:
+                print(f"Now at instance {index}, cluster{ k}")
+
+            nominator = (niw_posteriors[k].beta + 1) * niw_posteriors[k].p_lambda
+            denominator = niw_posteriors[k].niu - len(x_row) + 1
+            denominator *= niw_posteriors[k].beta
+            scale_matrix = nominator / denominator
+
+            log_pdf = student_t_pdf(x_row, niw_posteriors[k].niu, len(x_row), niw_posteriors[k].miu, scale_matrix)
+            print(f"log pdf for instance {index} = {log_pdf}")
+            log_responsibilities[k, index] = np.log(np.maximum(log_pdf, toll)) + np.log(mixing_weights[k])
+
+    return np.exp(log_responsibilities)
 
 
 def _data_mean(x_train):
@@ -163,16 +193,14 @@ def student_t_pdf(x_in, degrees_of_freedom, dim_data, cluster_mean, scale_matrix
 
     nominator = gammaln((degrees_of_freedom + dim_data) / 2)
     denominator = gammaln(degrees_of_freedom / 2) * ((degrees_of_freedom * np.pi) ** dim_data / 2)
-    # print(f"scale_matrix = {scale_matrix}")
     # print(f"np.linalg.det(scale_matrix) = {np.linalg.det(scale_matrix)}")
     denominator *= np.sqrt(np.linalg.det(scale_matrix))
 
     diff = (x_in - cluster_mean).reshape(-1, 1)
     free_term = (1 + (1 / degrees_of_freedom) * (diff.transpose() @ np.linalg.inv(scale_matrix) @ diff))
-    # print(f"degrees_of_freedom = {degrees_of_freedom}")
     free_term **= ((degrees_of_freedom + dim_data) / -2)
 
-    return (nominator / denominator) * free_term
+    return float((nominator / denominator) * free_term)
 
 
 def build_sample_covariance(x_train, no_clusters, soft_counts, weighted_means, responsibilities):

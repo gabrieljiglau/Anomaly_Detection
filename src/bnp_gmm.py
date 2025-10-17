@@ -121,7 +121,7 @@ class BayesianNonparametricMixture:
             # acc = self._evaluate_performance(x_train, y_train, self.niw_posteriors, self.sticks)
             # print(f"Accuracy score = {acc}") 
 
-            log_likelihood = compute_log_likelihood(x_train, dim_data,
+            log_likelihood = dataset_log_likelihood(x_train, dim_data,
                                                     [posterior.miu for posterior in self.niw_posteriors],
                                                     [posterior.p_lambda for posterior in self.niw_posteriors],
                                                     [stick.weight for stick in self.sticks])
@@ -133,9 +133,12 @@ class BayesianNonparametricMixture:
         with open(posteriors, 'wb') as f:
             pickle.dump({'niw_posteriors': self.niw_posteriors,
                         'alpha_posteriors': self.alpha_posteriors,
-                        'sticks_list': self.sticks_list,
+                        'sticks_list': self.sticks,
                         'active_clusters': self.active_clusters,
                         'log_likelihoods': log_likelihoods}, f)
+
+        print(f"Posteriors saved successfully to {posteriors}")
+
 
     def predict(self, x_test, y_test, num_samples=30, posteriors='../models/posteriors.pkl'):
 
@@ -292,5 +295,5 @@ class BayesianNonparametricMixture:
             self.niw_posteriors[cluster].update_lambda(self.priors.beta_0, self.priors.miu_0, self.priors.lambda_0,
                                                        cluster, soft_counts, weighted_means, sample_cov)
 
-        print(f"len(self.sticks) = {len(self.sticks)}")
+
         return self.active_clusters, self.alpha_posteriors, self.sticks, self.niw_posteriors

@@ -36,6 +36,14 @@ representation capability [2].
 
 After clustering using max _truncated_ clusters, it is expected that the ones with the lowest weight are fraudulent. Additionally, metrics like anomaly scores or threshold selection can be further employed in order to make more educated guesses.
 
+```
+Flagging top 1% of instances as anomalous. Detected 293 out of 492
+Flagging top 2% of instances as anomalous. Detected 379 out of 492
+Flagging top 3% of instances as anomalous. Detected 409 out of 492
+Flagging top 4% of instances as anomalous. Detected 426 out of 492
+Flagging top 5% of instances as anomalous. Detected 432 out of 492
+```
+
 ### References
 [1]: [Teh, Y. W., Jordan, M. I., Beal, M. J., & Blei, D. M. (2006). Hierarchical Dirichlet processes. Journal of the American Statistical Association, 101(476), 1566–1581](https://doi.org/10.1198/016214506000000302)
 
