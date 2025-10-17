@@ -52,4 +52,4 @@ if __name__ == '__main__':
         threshold = np.percentile(anomaly_scores, percentile)
         anomalies = [idx for idx, x in enumerate(X) if anomaly_scores[idx] < threshold ]
         print(f"Flagging top {percentile}% of instances as anomalous. "
-              f"Detected {anomaly_statistics(anomalies, true_anomalies, Y)} out of {len(true_anomalies)}")
+              f"Detected {anomaly_statistics(anomalies, true_anomalies)} out of {len(true_anomalies)}")

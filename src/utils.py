@@ -124,7 +124,7 @@ def dataset_log_likelihood(x_train, dim_data, cluster_means, cov_matrices, mixin
     return log_likelihood
 
 
-def anomaly_statistics(detected_x, true_anomalies, labels):
+def anomaly_statistics(detected_x, true_anomalies):
 
     detected_anomalies = 0
     for true_y in true_anomalies:
