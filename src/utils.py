@@ -203,6 +203,47 @@ def student_t_pdf(x_in, degrees_of_freedom, dim_data, cluster_mean, scale_matrix
     return float((nominator / denominator) * free_term)
 
 
+def non_active_instances(x, niw_posteriors, sticks, truncate_from, k_max):
+
+    non_active_indices = []
+
+    for idx, x_in in enumerate(x):
+        result_probs = []
+        result_instance = []
+
+        if idx % 100000 == 0:
+            print(f"Now at index {idx}")
+
+        for k in range(k_max):
+            nominator = (niw_posteriors[k].beta + 1) * niw_posteriors[k].p_lambda
+            denominator = niw_posteriors[k].niu - len(x_in) + 1
+            denominator *= niw_posteriors[k].beta
+            scale_matrix = nominator / denominator
+
+            result_instance.append(student_t_pdf(x_in, niw_posteriors[k].niu, len(x_in), niw_posteriors[k].miu,
+                                                 scale_matrix) * sticks[k].weight)
+        result_probs.append(result_instance)
+        print(f"result_probs = {result_probs}")
+        # result_probs /= np.sum(result_probs)
+        cluster_idx = np.argmax(result_probs)
+        print(f"cluster_idx = {cluster_idx}")
+
+        if cluster_idx > truncate_from:
+            non_active_indices.append(cluster_idx)
+
+    return non_active_indices
+
+
+def na_cluster_probs(instance_probs, instances):
+
+    return np.array([instance_probs[instance_idx] for instance_idx in instances])
+
+
+def na_mixing_weights(mixing_weights, instances):
+
+    return np.array([mixing_weights[instance_idx] for instance_idx in instances])
+
+
 def build_sample_covariance(x_train, no_clusters, soft_counts, weighted_means, responsibilities):
 
 
