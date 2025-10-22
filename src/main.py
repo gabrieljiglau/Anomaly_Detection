@@ -49,13 +49,24 @@ if __name__ == '__main__':
 
     # flag the clusters that have less than 1% of the total mixing weight as the inactive, and store them
 
-    print(f"active clusters = {active_clusters}")
+    print(f"weights = {mixing_weights}")
 
+    weights_idx = sorted(range(len(mixing_weights)), key=lambda i: mixing_weights[i], reverse=True)
+    weights_descending = [mixing_weights[idx] for idx in weights_idx]
+    print(f"weights_descending = {weights_descending}")
+
+    accumulated_weights = 0
+    clusters = []
+    for idx in weights_idx:
+        if accumulated_weights < 0.99:
+            accumulated_weights += mixing_weights[idx]
+            clusters.append(idx)
+
+    diff = [idx for idx in weights_idx if idx not in clusters]
+    
     # na = 'non active'
-
-    """
     if not os.path.exists('../models/na_indices.pkl'):
-        na_instances = non_active_instances(X[0:300], niw_posteriors, sticks, active_clusters, truncated_k)
+        na_instances = non_active_instances(X[0:1], niw_posteriors, mixing_weights, diff[0], truncated_k)
         with open('../models/na_indices.pkl', 'wb') as f:
             pickle.dump(na_instances, f)
     else:
@@ -63,7 +74,6 @@ if __name__ == '__main__':
             na_instances = pickle.load(f)
 
     print(na_instances[0:30])
-    """
 
     """
     cluster_probs = na_cluster_probs(instance_probs, na_instances)

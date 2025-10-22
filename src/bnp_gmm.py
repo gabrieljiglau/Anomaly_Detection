@@ -115,7 +115,7 @@ class BayesianNonparametricMixture:
             print(f"Now at iteration {iteration}")
 
             self.variational_e_step(x_train, dim_data)
-            self.variational_m_step(x_train, dim_data)
+            self.variational_m_step(x_train)
 
             # only for testing with fixed k
             # acc = self._evaluate_performance(x_train, y_train, self.niw_posteriors, self.sticks)
@@ -240,7 +240,7 @@ class BayesianNonparametricMixture:
         log_responsibilities -= logsumexp(log_responsibilities, axis=0, keepdims=True)
         self.responsibilities = np.exp(log_responsibilities)
 
-    def variational_m_step(self, x_train, dim_data):
+    def variational_m_step(self, x_train):
         
         """
         update the posteriors for the concentration parameter, niw and the sticks

@@ -193,7 +193,8 @@ def student_t_pdf(x_in, degrees_of_freedom, dim_data, cluster_mean, scale_matrix
 
     nominator = gammaln((degrees_of_freedom + dim_data) / 2)
     denominator = gammaln(degrees_of_freedom / 2) * ((degrees_of_freedom * np.pi) ** dim_data / 2)
-    # print(f"np.linalg.det(scale_matrix) = {np.linalg.det(scale_matrix)}")
+    print(f"np.linalg.det(scale_matrix) = {np.linalg.det(scale_matrix)}")
+    print(f"np.trace(scale_matrix = {np.trace(scale_matrix)}")
     denominator *= np.sqrt(np.linalg.det(scale_matrix))
 
     diff = (x_in - cluster_mean).reshape(-1, 1)
@@ -203,35 +204,42 @@ def student_t_pdf(x_in, degrees_of_freedom, dim_data, cluster_mean, scale_matrix
     return float((nominator / denominator) * free_term)
 
 
-def non_active_instances(x, niw_posteriors, sticks, truncate_from, k_max):
+def non_active_instances(x, niw_posteriors, mixing_weights, truncate_from, k_max):
 
-    non_active_indices = []
+    """
+    :return: the instances from the clusters with low probability
+    (those already flagged as inactive (cumulative weight < 0.01) )
+    """
 
+    na_instances = []
     for idx, x_in in enumerate(x):
-        result_probs = []
-        result_instance = []
 
         if idx % 100000 == 0:
             print(f"Now at index {idx}")
 
+        result_probs = []
         for k in range(k_max):
+            print(k)
             nominator = (niw_posteriors[k].beta + 1) * niw_posteriors[k].p_lambda
             denominator = niw_posteriors[k].niu - len(x_in) + 1
             denominator *= niw_posteriors[k].beta
             scale_matrix = nominator / denominator
 
-            result_instance.append(student_t_pdf(x_in, niw_posteriors[k].niu, len(x_in), niw_posteriors[k].miu,
-                                                 scale_matrix) * sticks[k].weight)
-        result_probs.append(result_instance)
-        print(f"result_probs = {result_probs}")
-        # result_probs /= np.sum(result_probs)
+            # result_probs.append((student_t_pdf(x_in, niw_posteriors[k].niu, len(x_in), niw_posteriors[k].miu, scale_matrix))
+                               # * mixing_weights[k])
+            print(gaussian_pdf(x_in, len(x_in), scale_matrix, niw_posteriors[k].miu))
+            result_probs.append(gaussian_pdf(x_in, len(x_in), scale_matrix, niw_posteriors[k].miu))
+
+            # print(f"result_probs = {result_probs}")
+        # result_probs = np.exp(result_probs - np.max(re))
         cluster_idx = np.argmax(result_probs)
+        # print(f"result_probs = {result_probs}")
         print(f"cluster_idx = {cluster_idx}")
 
         if cluster_idx > truncate_from:
-            non_active_indices.append(cluster_idx)
+            na_instances.append(idx)
 
-    return non_active_indices
+    return na_instances
 
 
 def na_cluster_probs(instance_probs, instances):
