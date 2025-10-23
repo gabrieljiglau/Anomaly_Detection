@@ -204,7 +204,7 @@ def student_t_pdf(x_in, degrees_of_freedom, dim_data, cluster_mean, scale_matrix
     return float((nominator / denominator) * free_term)
 
 
-def non_active_instances(x, niw_posteriors, mixing_weights, truncate_from, k_max):
+def non_active_instances(x, niw_posteriors, truncate_from, k_max):
 
     """
     :return: the instances from the clusters with low probability
@@ -212,6 +212,7 @@ def non_active_instances(x, niw_posteriors, mixing_weights, truncate_from, k_max
     """
 
     na_instances = []
+    na_clusters = []
     for idx, x_in in enumerate(x):
 
         if idx % 100000 == 0:
@@ -227,29 +228,27 @@ def non_active_instances(x, niw_posteriors, mixing_weights, truncate_from, k_max
 
             # result_probs.append((student_t_pdf(x_in, niw_posteriors[k].niu, len(x_in), niw_posteriors[k].miu, scale_matrix))
                                # * mixing_weights[k])
-            print(gaussian_pdf(x_in, len(x_in), scale_matrix, niw_posteriors[k].miu))
             result_probs.append(gaussian_pdf(x_in, len(x_in), scale_matrix, niw_posteriors[k].miu))
 
-            # print(f"result_probs = {result_probs}")
-        # result_probs = np.exp(result_probs - np.max(re))
         cluster_idx = np.argmax(result_probs)
         # print(f"result_probs = {result_probs}")
-        print(f"cluster_idx = {cluster_idx}")
+        # print(f"cluster_idx = {cluster_idx}")
 
         if cluster_idx > truncate_from:
             na_instances.append(idx)
+            na_clusters.append(cluster_idx)
 
-    return na_instances
-
-
-def na_cluster_probs(instance_probs, instances):
-
-    return np.array([instance_probs[instance_idx] for instance_idx in instances])
+    return na_instances, na_clusters
 
 
-def na_mixing_weights(mixing_weights, instances):
+def na_cluster_probs(instance_probs, na_instances, na_clusters):
 
-    return np.array([mixing_weights[instance_idx] for instance_idx in instances])
+    return np.array([instance_probs[na_clusters[i], na_instances[i]] for i in range(len(na_instances))])
+
+
+def na_mixing_weights(mixing_weights, na_clusters):
+
+    return np.array([mixing_weights[na_clusters[i]] for i in range(len(na_clusters))])
 
 
 def build_sample_covariance(x_train, no_clusters, soft_counts, weighted_means, responsibilities):

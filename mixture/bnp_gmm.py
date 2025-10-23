@@ -68,7 +68,7 @@ class NiwPosteriors:
         self.p_lambda = lambda_0 + observed_data + uncertainty_coefficient
 
 
-class BayesianNonparametricMixture:
+class BayesianGaussianMixture:
 
     """
     Hierarchical Dirichlet Process (DP) for GMMs, using a truncated Stick-Breaking prior
