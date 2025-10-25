@@ -1,9 +1,7 @@
-import sys, os
 import pickle
 import numpy as np
 import pandas as pd
 import streamlit as st
-import importlib
 import plotly.express as px
 
 with open('../models/posteriors.pkl', 'rb') as f:
