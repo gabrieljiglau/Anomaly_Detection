@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "src"
+version = "0.1.0"
+description = "Unsupervised anomaly detection with BNP-GMM"
+authors = [{name = "Jiglău Gabriel", email="gabriel_jiglau@yahoo.com"}]
+readme = "README.md"
+requires-python = ">=3.9"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -38,7 +38,7 @@ class PickleReader(DataLoader):
             params_list = []
             with open(file_path, 'rb') as f:
                 saved_data = pickle.load(f)
-                for _, value in saved_data.items():
+                for value in saved_data.values():
                     params_list.append(value)
 
                 return params_list

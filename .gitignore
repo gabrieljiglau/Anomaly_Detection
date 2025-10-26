@@ -9,6 +9,7 @@ __pycache__/
 # ignore the dataset (150 MB)
 datasets/
 models/
+src/src.egg-info
 
 # Distribution / packaging
 .Python

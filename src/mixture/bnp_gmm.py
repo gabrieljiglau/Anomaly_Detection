@@ -10,6 +10,7 @@ from scipy.special import gammaln, psi, logsumexp
 from scipy.stats import gamma, invwishart, multivariate_normal
 from scipy.linalg import fractional_matrix_power
 from dataclasses import dataclass
+from src.utils import stick_breaking_prior, gaussian_pdf, student_t_pdf, map_clusters
 
 
 def weights_expectations(sticks, truncated_clusters):
@@ -92,17 +93,11 @@ def weight_posterior(current_k, sticks):
     return weight
 
 
-def gaussian_pdf(instance, dim_data, covariance, mean):
-    # instance is a real valued vector
-    denominator =  (2 * np.pi) ** (dim_data / 2) * np.sqrt(np.linalg.det(covariance))
-    diff = instance - mean
-    cov_inverse = fractional_matrix_power(covariance, -1)
-    exp_term = np.exp(-1/2 * (diff.transpose() @ cov_inverse @ diff))
+def log_likelihood_gaussian(x_train, dim_data, cluster_means, cov_matrices, mixing_weights):
 
-    return exp_term / denominator
-
-
-def dataset_log_likelihood(x_train, dim_data, cluster_means, cov_matrices, mixing_weights):
+    """
+    :return: log (pi * gaussian(params)) for each instance
+    """
 
     log_likelihood = 0
     for row in x_train:
@@ -114,17 +109,11 @@ def dataset_log_likelihood(x_train, dim_data, cluster_means, cov_matrices, mixin
     return log_likelihood
 
 
-def anomaly_statistics(detected_x, true_anomalies):
+def log_likelihood_t(X, k_max, niw_posteriors, mixing_weights, toll=1e-300):
 
-    detected_anomalies = 0
-    for true_y in true_anomalies:
-        if true_y in detected_x:
-            detected_anomalies += 1
-
-    return detected_anomalies
-
-
-def instance_log_likelihood(X, k_max, niw_posteriors, mixing_weights, toll=1e-300):
+    """
+    :return: log (pi * student_T(params)) for each instance
+    """
 
     log_responsibilities = np.zeros((k_max, X.shape[0]))
 
@@ -177,59 +166,6 @@ def init_clusters(k, x_train):
     return kmeans.cluster_centers_, kmeans.labels_
 
 
-def student_t_pdf(x_in, degrees_of_freedom, dim_data, cluster_mean, scale_matrix):
-
-    scale_matrix = (scale_matrix * scale_matrix.transpose()) / 2
-
-    nominator = gammaln((degrees_of_freedom + dim_data) / 2)
-    denominator = gammaln(degrees_of_freedom / 2) * ((degrees_of_freedom * np.pi) ** dim_data / 2)
-    denominator *= np.sqrt(np.linalg.det(scale_matrix))
-
-    diff = (x_in - cluster_mean).reshape(-1, 1)
-    free_term = (1 + (1 / degrees_of_freedom) * (diff.transpose() @ np.linalg.inv(scale_matrix) @ diff))
-    free_term **= ((degrees_of_freedom + dim_data) / -2)
-
-    return float((nominator / denominator) * free_term)
-
-
-def non_active_clusters(x, niw_posteriors, truncate_from, k_max, mixing_weights):
-
-    """
-    :return: the clusters with the lowest number of assigned instances
-    """
-
-    na_instances = []
-    na_clusters = []
-    cluster_instances = np.zeros(k_max)
-    for idx, x_in in enumerate(x):
-
-        if idx % 100000 == 0:
-            print(f"Now at index {idx}")
-
-        result_probs = []
-        for k in range(k_max):
-            nominator = (niw_posteriors[k].beta + 1) * niw_posteriors[k].p_lambda
-            denominator = niw_posteriors[k].niu - len(x_in) + 1
-            denominator *= niw_posteriors[k].beta
-            scale_matrix = nominator / denominator
-
-            #result_probs.append((student_t_pdf(x_in, niw_posteriors[k].niu, len(x_in), niw_posteriors[k].miu, scale_matrix))
-                              # * mixing_weights[k])
-            result_probs.append(gaussian_pdf(x_in, len(x_in), scale_matrix, niw_posteriors[k].miu) * mixing_weights[k])
-
-        cluster_idx = np.argmax(result_probs)
-        # print(f"result_probs = {result_probs}")
-        # print(f"cluster_idx = {cluster_idx}")
-        cluster_instances[cluster_idx] += 1
-
-        """
-        if cluster_idx > truncate_from:
-            na_instances.append(idx)
-            na_clusters.append(cluster_idx)
-        """
-    return na_instances, na_clusters, cluster_instances
-
-
 def build_sample_covariance(x_train, no_clusters, soft_counts, weighted_means, responsibilities):
 
 
@@ -253,18 +189,6 @@ def build_coefficient(beta_0, miu_0, soft_count, weighted_mean):
     diff = (weighted_mean - miu_0).reshape(-1, 1)
 
     return first_term * (diff @ diff.transpose())
-
-
-def map_clusters(true_labels, cluster_assignments, no_clusters):
-
-    cm = confusion_matrix(true_labels, cluster_assignments, labels=range(no_clusters))
-    # print(f"confusion_matrix = {cm}")
-    rows, cols = linear_sum_assignment(-cm)
-
-    mapping = {col: row for row, col in zip(rows, cols)}
-    new_assignments = np.array([mapping[cluster] for cluster in cluster_assignments])
-
-    return new_assignments, mapping
 
 
 def sample_covariance(degrees_of_freedom, scale_matrix):
@@ -356,7 +280,7 @@ class BayesianGaussianMixture:
         self.responsibilities = []
 
 
-    def train(self, num_iterations: int, x_train: pd.DataFrame, y_train=None, posteriors='../models/posteriors.pkl'):
+    def train(self, num_iterations: int, x_train: pd.DataFrame, y_train=None):
 
         # the assumption here is that param x_train is cleaned and standardized, and are stored as numpy arrays
         dim_data = x_train.shape[1]
@@ -390,26 +314,21 @@ class BayesianGaussianMixture:
             # acc = self._evaluate_performance(x_train, y_train, self.niw_posteriors, self.sticks)
             # print(f"Accuracy score = {acc}") 
 
-            log_likelihood = dataset_log_likelihood(x_train, dim_data,
-                                                    [posterior.miu for posterior in self.niw_posteriors],
-                                                    [posterior.p_lambda for posterior in self.niw_posteriors],
-                                                    [stick.weight for stick in self.sticks])
+            log_likelihood = log_likelihood_gaussian(x_train, dim_data,
+                                                     [posterior.miu for posterior in self.niw_posteriors],
+                                                     [posterior.p_lambda for posterior in self.niw_posteriors],
+                                                     [stick.weight for stick in self.sticks])
             print(f"log_likelihood = {log_likelihood}")
             log_likelihoods.append(log_likelihood)
 
 
         # all log_likelihoods, alpha_posteriors, sticks and active clusters, since they will be used for plotting
-        with open(posteriors, 'wb') as f:
-            pickle.dump({'niw_posteriors': self.niw_posteriors,
-                        'alpha_posteriors': self.alpha_posteriors,
-                        'sticks_list': self.sticks,
-                        'active_clusters': self.active_clusters,
-                        'log_likelihoods': log_likelihoods}, f)
-
-        print(f"Posteriors saved successfully to {posteriors}")
+        return self.niw_posteriors, self.alpha_posteriors, self.sticks,  self.active_clusters, log_likelihoods
 
 
     def predict(self, x_test, y_test, num_samples=30, posteriors='../models/posteriors.pkl'):
+
+        # aici ar trebui sa actualizezi cum salvezi / incarci parametrii invatati ai algoritmului
 
         """
         :return: the sampled parameters from each gaussian(mean, cov_matrix), as long as the number of samples drawn
@@ -418,7 +337,6 @@ class BayesianGaussianMixture:
         if os.path.exists(posteriors):
             with open(posteriors, 'rb') as f:
                 saved_posteriors = pickle.load(f)
-                index = saved_posteriors['index']
                 self.niw_posteriors = saved_posteriors['niw_posteriors']
                 self.alpha_posteriors = saved_posteriors['alpha_posteriors']
                 self.sticks = saved_posteriors['sticks_list']
