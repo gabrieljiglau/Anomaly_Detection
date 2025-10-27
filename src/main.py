@@ -1,7 +1,7 @@
 import numpy as np
 from pandas import read_feather
 from pathlib import Path
-from src.mixture.bnp_gmm import BayesianGaussianMixture
+from mixture import BayesianGaussianMixture
 from src.pio import Loader
 from src.utils import anomaly_statistics, log_likelihood_t, weight_posterior
 
@@ -23,7 +23,7 @@ if __name__ == '__main__':
     POSTERIORS_PATH = MAIN_PATH.parent / "models" / "posteriors.pkl"
     LOG_LIKELIHOOD_PATH = MAIN_PATH.parent / "models" / "instance_log_likelihood.pkl"
 
-    df = read_feather('../datasets/processed/creditcard_standardized.feather')
+    df = read_feather(DATA_PATH)
     X = df.iloc[:, :-1]
     X = X.to_numpy()
 
