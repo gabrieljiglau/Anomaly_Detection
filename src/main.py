@@ -1,54 +1,55 @@
 import numpy as np
-from pandas import read_csv
+from pandas import read_feather
 from pathlib import Path
-from src.mixture.bnp_gmm import BayesianGaussianMixture, weight_posterior, log_likelihood_t
-from src.pio.operations import Loader
-from src.utils import anomaly_statistics
+from src.mixture.bnp_gmm import BayesianGaussianMixture
+from src.pio import Loader
+from src.utils import anomaly_statistics, log_likelihood_t, weight_posterior
+
+
+def extract_probs(probs_map):
+    probs = []
+    inner_list = []
+    for key in probs_map.keys():
+        for element in probs_map[key]:
+            inner_list.append(element)
+        probs.append(inner_list)
+    return np.array(probs)
+
 
 if __name__ == '__main__':
 
     MAIN_PATH = Path(__file__).parent
-    DATA_PATH = MAIN_PATH.parent / "datasets" / "iris_numeric.csv"
-    POSTERIORS_PATH = MAIN_PATH.parent / "models" / "posteriors1.pkl"
-    LOG_LIKELIHOOD_PATH = MAIN_PATH.parent / "models" / "instance_log_likelihood1.pkl"
+    DATA_PATH = MAIN_PATH.parent / "datasets" / "processed" / "creditcard_standardized.feather"
+    POSTERIORS_PATH = MAIN_PATH.parent / "models" / "posteriors.pkl"
+    LOG_LIKELIHOOD_PATH = MAIN_PATH.parent / "models" / "instance_log_likelihood.pkl"
 
-    # df = read_feather('../datasets/processed/creditcard_standardized.feather')
-    df = read_csv(DATA_PATH)
-    X = df.iloc[0:10, :-1]
+    df = read_feather('../datasets/processed/creditcard_standardized.feather')
+    X = df.iloc[:, :-1]
     X = X.to_numpy()
 
     Y = df.iloc[:, -1]
     Y = Y.to_numpy()
 
     alpha_init = [2, 10]
-    truncated_k = 3  # 50
-    iterations = 3 # 30
+    truncated_k = 50
+    iterations = 30
 
     bnp = BayesianGaussianMixture(alpha_init, truncated_k)
 
     loader = Loader()
     niw_posteriors, alpha_posteriors, sticks, active_clusters, log_likelihoods = (
         loader.fully_load(POSTERIORS_PATH, bnp.train, 5, iterations, X))
-
-    # sticks = sticks[iterations] # the sticks from all 30 iterations were saved; I only want the last one
-
+    
     mixing_weights = np.zeros(truncated_k)
     for k in range(truncated_k):
-        mixing_weights[k] = weight_posterior(k, sticks)
+        mixing_weights[k] = weight_posterior(sticks, k)
 
     cluster_probs_map = loader.fully_load(LOG_LIKELIHOOD_PATH,
                                           log_likelihood_t, 1, X, truncated_k,
                                           niw_posteriors, mixing_weights)
 
-    # extract the probabilities from the dictionary
-    cluster_probs = []
-    inner_list = []
-    for key in cluster_probs_map.keys():
-        for element in cluster_probs_map[key]:
-            inner_list.append(element)
-        cluster_probs.append(inner_list)
-
-    cluster_probs = np.array(cluster_probs)
+    # extract the probabilities from the dictionary if only the loader already has written the data
+    cluster_probs = extract_probs(cluster_probs_map) if isinstance(cluster_probs_map, dict) else cluster_probs_map
 
     mixing_weights = mixing_weights[:, np.newaxis]
     weighted_probs = cluster_probs * mixing_weights

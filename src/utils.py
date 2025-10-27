@@ -36,6 +36,31 @@ def student_t_pdf(x_in, degrees_of_freedom, dim_data, cluster_mean, scale_matrix
     return float((nominator / denominator) * free_term)
 
 
+def log_likelihood_t(x, k_max, niw_posteriors, mixing_weights, toll=1e-300):
+    """
+    :return: log (pi * student_T(params)) for each instance
+    """
+
+    log_responsibilities = np.zeros((k_max, x.shape[0]))
+
+    for k in range(k_max):
+        for index, x_row in enumerate(x):
+
+            if index % 10000 == 0:
+                print(f"Now at instance {index}, cluster{k}")
+
+            nominator = (niw_posteriors[k].beta + 1) * niw_posteriors[k].p_lambda
+            denominator = niw_posteriors[k].niu - len(x_row) + 1
+            denominator *= niw_posteriors[k].beta
+            scale_matrix = nominator / denominator
+
+            log_pdf = student_t_pdf(x_row, niw_posteriors[k].niu, len(x_row), niw_posteriors[k].miu, scale_matrix)
+            print(f"log pdf for instance at index: {index} = {log_pdf}")
+            log_responsibilities[k, index] = np.log(np.maximum(log_pdf, toll)) + np.log(mixing_weights[k])
+
+    return np.exp(log_responsibilities)
+
+
 def gaussian_pdf(instance, dim_data, covariance, mean):
     # instance is a real valued vector
     denominator =  (2 * np.pi) ** (dim_data / 2) * np.sqrt(np.linalg.det(covariance))
@@ -46,6 +71,71 @@ def gaussian_pdf(instance, dim_data, covariance, mean):
     return exp_term / denominator
 
 
+def log_likelihood_gaussian(x_train, dim_data, cluster_means, cov_matrices, mixing_weights):
+    """
+    :return: log (pi * gaussian(params)) for each instance
+    """
+
+    log_likelihood = 0
+    for row in x_train:
+        prob_sum = 0
+        for i in range(len(cluster_means)):
+            prob_sum += mixing_weights[i] * gaussian_pdf(row, dim_data, cov_matrices[i], cluster_means[i])
+        log_likelihood += np.log(prob_sum) + 1e-12
+
+    return log_likelihood
+
+
+def build_sample_covariance(x_train, no_clusters, soft_counts, weighted_means, responsibilities):
+    covariance = []
+    for k in range(no_clusters):
+        cov_dim = 0
+        for idx, row in enumerate(x_train):
+            diff = row - weighted_means[k]
+            diff = diff.reshape(-1, 1)
+            cov_dim += (diff @ diff.transpose()) * responsibilities[k, idx]
+
+        # print(f"cov_dim = {cov_dim}")
+        # print(f"soft_counts[k] = {soft_counts[k]}")  # should sum up to 1
+        soft_counts[k] = max(soft_counts[k], 1e-12)
+        covariance.append(cov_dim / soft_counts[k])
+    return np.array(covariance)
+
+
+def build_coefficient(beta_0, miu_0, soft_count, weighted_mean):
+    first_term = (beta_0 * soft_count) / (beta_0 + soft_count)
+    diff = (weighted_mean - miu_0).reshape(-1, 1)
+
+    return first_term * (diff @ diff.transpose())
+
+
+def count_clusters(expectations):
+    active_clusters = 0
+    current_percentage = 0
+    print(f"expectations = {expectations}")
+    sorted_expectations = sorted(expectations, reverse=True)
+    for weight in sorted_expectations:
+        if current_percentage < 0.99:
+            active_clusters += 1
+        current_percentage += weight
+
+    return active_clusters
+
+
+def weight_posterior(sticks, current_k):
+
+    a_k = sticks[current_k].a_k
+    b_k = sticks[current_k].b_k
+    weight = a_k / (a_k + b_k)
+
+    for j in range(current_k):
+        a_j = sticks[j].a_k
+        b_j = sticks[j].b_k
+        weight *= b_j / (a_j + b_j)
+
+    return weight
+
+
 def anomaly_statistics(detected_x, true_anomalies):
 
     detected_anomalies = 0
@@ -54,6 +144,7 @@ def anomaly_statistics(detected_x, true_anomalies):
             detected_anomalies += 1
 
     return detected_anomalies
+
 
 def map_clusters(true_labels, cluster_assignments, no_clusters):
 

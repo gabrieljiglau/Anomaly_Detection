@@ -5,134 +5,20 @@ import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.metrics import confusion_matrix, accuracy_score
 from sklearn.exceptions import NotFittedError
-from scipy.optimize import linear_sum_assignment
 from scipy.special import gammaln, psi, logsumexp
-from scipy.stats import gamma, invwishart, multivariate_normal
+from scipy.stats import beta, invwishart, multivariate_normal
 from scipy.linalg import fractional_matrix_power
 from dataclasses import dataclass
-from src.utils import stick_breaking_prior, gaussian_pdf, student_t_pdf, map_clusters
+from src.pio import Loader
+from src.utils import *
 
 
-def weights_expectations(sticks, truncated_clusters):
+def init_centroids(k, x_train):
 
-    """
-    :param sticks: the weight for each cluster
-    :param truncated_clusters: maximum clusters allowed
-    :return: the total clusters which have the expectation(weight) > threshold (e.g. 1e-3)
-    """
+    kmeans = KMeans(n_clusters=k, n_init=3, max_iter=1, random_state=13)
+    kmeans.fit(x_train)
 
-    expectations = np.zeros(truncated_clusters, dtype=float)
-    for cluster in range(truncated_clusters):
-        a_k = sticks[cluster].a_k
-        b_k = sticks[cluster].b_k
-        current_exp = a_k / (a_k + b_k)  # aici cica ar trebui np.log ??
-
-        for j in range(cluster):
-            a_j = sticks[j].a_k
-            b_j = sticks[j].b_k
-            current_exp *= b_j / (a_j + b_j)
-
-        expectations[cluster] = current_exp
-
-    expectations /= np.sum(expectations)
-    # print(f"expectations = {expectations}")
-
-    return expectations
-
-
-def count_clusters(expectations):
-
-    active_clusters = 0
-    current_percentage = 0
-    sorted_expectations = sorted(expectations, reverse=True)
-    for weight in sorted_expectations:
-        if current_percentage < 0.99:
-            active_clusters += 1
-        current_percentage += weight
-
-    return active_clusters
-
-def beta_expectations(sticks, truncated_clusters, eps=1e-9):
-
-    total_exp = 0
-    for cluster in range(truncated_clusters):
-        # a, b are positive parameters
-        a_k = max(sticks[cluster].a_k, eps)
-        b_k = max(sticks[cluster].b_k, eps)
-        total_exp += psi(b_k + eps) - psi(a_k + b_k + eps) # numerical stability
-
-    print(f"total_exp = {total_exp}")
-    return total_exp
-
-
-def responsibilities_sum(current_k, responsibilities):
-
-    """
-    :param current_k: cluster index
-    :param responsibilities: the responsibilities
-    :return: Σ_i (Σ_j>k resp_ij)
-    """
-
-    if current_k >= responsibilities.shape[0] - 1:
-        return 0.0
-
-    return np.sum(responsibilities[current_k + 1: , :])
-
-
-def weight_posterior(current_k, sticks):
-
-    a_k = sticks[current_k].a_k
-    b_k = sticks[current_k].b_k
-    weight = a_k / (a_k + b_k)
-
-    for j in range(current_k):
-        a_j = sticks[j].a_k
-        b_j = sticks[j].b_k
-        weight *= b_j / (a_j + b_j)
-
-    return weight
-
-
-def log_likelihood_gaussian(x_train, dim_data, cluster_means, cov_matrices, mixing_weights):
-
-    """
-    :return: log (pi * gaussian(params)) for each instance
-    """
-
-    log_likelihood = 0
-    for row in x_train:
-        prob_sum = 0
-        for i in range(len(cluster_means)):
-            prob_sum += mixing_weights[i] * gaussian_pdf(row, dim_data, cov_matrices[i], cluster_means[i])
-        log_likelihood += np.log(prob_sum) + 1e-12
-
-    return log_likelihood
-
-
-def log_likelihood_t(X, k_max, niw_posteriors, mixing_weights, toll=1e-300):
-
-    """
-    :return: log (pi * student_T(params)) for each instance
-    """
-
-    log_responsibilities = np.zeros((k_max, X.shape[0]))
-
-    for k in range(k_max):
-        for index, x_row in enumerate(X):
-
-            if index % 10000 == 0:
-                print(f"Now at instance {index}, cluster{ k}")
-
-            nominator = (niw_posteriors[k].beta + 1) * niw_posteriors[k].p_lambda
-            denominator = niw_posteriors[k].niu - len(x_row) + 1
-            denominator *= niw_posteriors[k].beta
-            scale_matrix = nominator / denominator
-
-            log_pdf = student_t_pdf(x_row, niw_posteriors[k].niu, len(x_row), niw_posteriors[k].miu, scale_matrix)
-            print(f"log pdf for instance {index} = {log_pdf}")
-            log_responsibilities[k, index] = np.log(np.maximum(log_pdf, toll)) + np.log(mixing_weights[k])
-
-    return np.exp(log_responsibilities)
+    return kmeans.cluster_centers_, kmeans.labels_
 
 
 def _data_mean(x_train):
@@ -151,44 +37,11 @@ def init_priors(no_clusters, x_train, dim_data, epsilon):
     degree_of_freedom, scale_matrix
     """
 
-    return [np.ones(no_clusters),
-            _data_mean(x_train),
-            1,
-            x_train.shape[1] + 1,
-            (np.eye(dim_data) * epsilon) + np.eye(dim_data)]
-
-
-def init_clusters(k, x_train):
-
-    kmeans = KMeans(n_clusters=k, n_init=3, max_iter=1, random_state=13)
-    kmeans.fit(x_train)
-
-    return kmeans.cluster_centers_, kmeans.labels_
-
-
-def build_sample_covariance(x_train, no_clusters, soft_counts, weighted_means, responsibilities):
-
-
-    covariance = []
-    for k in range(no_clusters):
-        cov_dim = 0
-        for idx, row in enumerate(x_train):
-            diff = row - weighted_means[k]
-            diff = diff.reshape(-1, 1)
-            cov_dim += (diff @ diff.transpose()) * responsibilities[k, idx]
-
-        # print(f"cov_dim = {cov_dim}")
-        # print(f"soft_counts[k] = {soft_counts[k]}")  # should sum up to 1
-        soft_counts[k] = max(soft_counts[k], 1e-12)
-        covariance.append(cov_dim / soft_counts[k])
-    return np.array(covariance)
-
-
-def build_coefficient(beta_0, miu_0, soft_count, weighted_mean):
-    first_term = (beta_0 * soft_count) / (beta_0 + soft_count)
-    diff = (weighted_mean - miu_0).reshape(-1, 1)
-
-    return first_term * (diff @ diff.transpose())
+    return [np.ones(no_clusters), # prior on weights
+            _data_mean(x_train), # data_mean
+            1, # strength_mean (the confidence in the data_mean); 1 = weak confidence
+            x_train.shape[1] + 1, # degree_of_freedom
+            (np.eye(dim_data) * epsilon) + np.eye(dim_data)] # scale_matrix
 
 
 def sample_covariance(degrees_of_freedom, scale_matrix):
@@ -279,17 +132,63 @@ class BayesianGaussianMixture:
         self.alpha_posteriors = np.array(alpha_posteriors)
         self.responsibilities = []
 
+    def responsibilities_sum(self, current_k):
 
-    def train(self, num_iterations: int, x_train: pd.DataFrame, y_train=None):
+            """
+            :param current_k: cluster index
+            :return: Σ_i (Σ_j>k resp_ij)
+            """
+
+            if current_k >= self.responsibilities.shape[0] - 1:
+                return 0.0
+
+            return np.sum(self.responsibilities[current_k + 1:, :])
+
+    def beta_expectations(self, eps=1e-9):
+
+        total_exp = 0
+        for cluster in range(self.k):
+            # a, b are positive parameters
+            a_k = max(self.sticks[cluster].a_k, eps)
+            b_k = max(self.sticks[cluster].b_k, eps)
+            total_exp += psi(b_k + eps) - psi(a_k + b_k + eps)  # numerical stability
+
+        print(f"total_exp = {total_exp}")
+        return total_exp
+
+    def weights_expectations(self):
+
+        expectations = np.zeros(self.k, dtype=float)
+        for cluster in range(self.k):
+            a_k = self.sticks[cluster].a_k
+            b_k = self.sticks[cluster].b_k
+            current_exp = a_k / (a_k + b_k)   # maybe here I should take the log ??
+
+            for j in range(cluster):
+                a_j = self.sticks[j].a_k
+                b_j = self.sticks[j].b_k
+                current_exp *= b_j / (a_j + b_j)
+
+            expectations[cluster] = current_exp
+
+        expectations /= np.sum(expectations)
+        # print(f"expectations = {expectations}")
+        return expectations
+
+    def train(self, num_iterations: int, x_train: np.ndarray, y_train=None):
 
         # the assumption here is that param x_train is cleaned and standardized, and are stored as numpy arrays
+
+        if not isinstance(x_train, np.ndarray):
+            raise TypeError(f"x_train must be np.ndarray, and not {type(x_train).__name__}")
+
         dim_data = x_train.shape[1]
         self.responsibilities = np.zeros((self.k, dim_data))
 
         a = float(self.alpha_posteriors[0])
         b = float(self.alpha_posteriors[1])
 
-        cluster_means, labels = init_clusters(self.k, x_train)  # cheap KMeans for a decent initialization
+        cluster_means, labels = init_centroids(self.k, x_train)  # cheap KMeans for a decent initialization
         weights = stick_breaking_prior(a=1, b=1, truncated_clusters=self.k)
 
         h_priors = init_priors(no_clusters=self.k, x_train=x_train, dim_data=dim_data, epsilon=1e-6)
@@ -312,7 +211,7 @@ class BayesianGaussianMixture:
 
             # only for testing with fixed k
             # acc = self._evaluate_performance(x_train, y_train, self.niw_posteriors, self.sticks)
-            # print(f"Accuracy score = {acc}") 
+            # print(f"Accuracy score = {acc}")
 
             log_likelihood = log_likelihood_gaussian(x_train, dim_data,
                                                      [posterior.miu for posterior in self.niw_posteriors],
@@ -325,45 +224,41 @@ class BayesianGaussianMixture:
         # all log_likelihoods, alpha_posteriors, sticks and active clusters, since they will be used for plotting
         return self.niw_posteriors, self.alpha_posteriors, self.sticks,  self.active_clusters, log_likelihoods
 
-
-    def predict(self, x_test, y_test, num_samples=30, posteriors='../models/posteriors.pkl'):
-
-        # aici ar trebui sa actualizezi cum salvezi / incarci parametrii invatati ai algoritmului
+    def predict(self, x_test, y_test, posteriors_path, num_samples=30):
 
         """
         :return: the sampled parameters from each gaussian(mean, cov_matrix), as long as the number of samples drawn
         """
 
-        if os.path.exists(posteriors):
-            with open(posteriors, 'rb') as f:
-                saved_posteriors = pickle.load(f)
-                self.niw_posteriors = saved_posteriors['niw_posteriors']
-                self.alpha_posteriors = saved_posteriors['alpha_posteriors']
-                self.sticks = saved_posteriors['sticks_list']
+        if os.path.exists(posteriors_path):
+            loader = Loader()
+            niw_posteriors, alpha_posteriors, sticks, _, _ = loader.read(posteriors_path, 5)
 
-                sigma_samples = []
-                mu_samples = []
-                for cluster_idx in range (self.k):
+            sigma_samples = []
+            mu_samples = []
+            for cluster_idx in range(self.k):
 
-                    sigma_sample = []
-                    mu_sample = []
-                    for sample in range(num_samples):
-                        cov_matrix = sample_covariance(self.niw_posteriors[cluster_idx].beta,
-                                                       np.linalg.inv(self.niw_posteriors[cluster_idx].p_lambda))
-                        mu = sample_mean(self.niw_posteriors[cluster_idx].miu, cov_matrix, self.niw_posteriors[cluster_idx].niu)
+                sigma_sample = []
+                mu_sample = []
+                for sample in range(num_samples):
+                    cov_matrix = sample_covariance(self.niw_posteriors[cluster_idx].beta,
+                                                   np.linalg.inv(self.niw_posteriors[cluster_idx].p_lambda))
+                    mu = sample_mean(self.niw_posteriors[cluster_idx].miu, cov_matrix,
+                                     self.niw_posteriors[cluster_idx].niu)
 
-                        sigma_sample.append(cov_matrix)
-                        mu_sample.append(mu)
+                    sigma_sample.append(cov_matrix)
+                    mu_sample.append(mu)
 
-                    sigma_samples.append(sigma_sample)
-                    mu_samples.append(mu_sample)
+                sigma_samples.append(sigma_sample)
+                mu_samples.append(mu_sample)
 
-                sigma_samples = np.array(sigma_samples)
-                mu_samples = np.array(mu_samples)
+            sigma_samples = np.array(sigma_samples)
+            mu_samples = np.array(mu_samples)
 
-                acc = self._evaluate_performance(x_test, y_test, self.niw_posteriors, self.sticks)
-                print(f"Accuracy on test data = {acc}")
-                return mu_samples, sigma_samples, num_samples
+            acc = self._evaluate_performance(x_test, y_test, self.niw_posteriors, self.sticks)
+            print(f"Accuracy on test data = {acc}")
+            return mu_samples, sigma_samples, num_samples
+
         else:
             raise NotFittedError('The Bayesian Nonparametric GMM needs to be trained first !')
 
@@ -441,17 +336,17 @@ class BayesianGaussianMixture:
         alpha_expectation = self.alpha_posteriors[0] / self.alpha_posteriors[1]
         for cluster in range(self.k):
             self.sticks[cluster].a_k = 1 + soft_counts[cluster]
-            self.sticks[cluster].b_k = alpha_expectation + responsibilities_sum(cluster, self.responsibilities)
+            self.sticks[cluster].b_k = alpha_expectation + self.responsibilities_sum(cluster)
 
         # alpha parameters update
-        pi_expectations = weights_expectations(self.sticks, self.k)
+        pi_expectations = self.weights_expectations()
         self.active_clusters = count_clusters(pi_expectations)
 
         # don't change the active clusters, since the clusters with low weight are more likely anomalous
         print(f"active_clusters = {self.active_clusters}")
 
         self.alpha_posteriors[0] = self.priors.a + self.k
-        self.alpha_posteriors[1] = self.priors.b - beta_expectations(self.sticks, self.k)
+        self.alpha_posteriors[1] = self.priors.b - self.beta_expectations()
 
         print(f"alpha_a = {self.alpha_posteriors[0]}")
         print(f"alpha_b = {self.alpha_posteriors[1]}")
